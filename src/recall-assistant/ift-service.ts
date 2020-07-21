@@ -21,7 +21,75 @@ export const constants = {
   URN_IFT_LGTIN: 'urn:ibm:ift:product:lot:class:',
   // URN for IFT GTIN
   URN_IFT_GTIN: 'urn:ibm:ift:product:class:',
+  // All available columns/headers for the csv output
+  ALL_HEADERS: {
+    productEPC:"Product (EPC)",
+    productName:"Product Name",
+    productGTIN:"Product GTIN",
+    finalLocationID:"Final Location (GLN)",
+    finalLocationName:"Final Location Name",
+    finalLocationType:"Final Location Type",
+    arrivalDate:"Arrival Date",
+    ingredientEPC:"Ingredient (EPC)",
+    ingredientName:"Ingredient Name",
+    ingredientGTIN:"Ingredient GTIN",
+    sourceLocationID:"Source Location (GLN)",
+    sourceLocationName:"Source Location Name",
+    sourceLocationType:"Source Location Type",
+    creationDate: "Creation Date",
+    transactionID: "Transaction ID",
+    transactionType: "Transaction Type",
+  },
 };
+
+/**
+ * CSVRow object to standardize order of output as well as easily
+ * 
+ */
+export class CSVRow extends Map<string, string | Date> {
+  headers: string[];
+
+  constructor(headers) {
+    super();
+    this.headers = headers;
+    headers.forEach((col) => this.set(col, null));
+    return this;
+  }
+
+  /**
+   * shallow copy of CSVRow instance
+   * 
+   * @returns: CSVRow shallow copy
+   */
+  copy(): CSVRow {
+    const copy = new CSVRow(this.headers);
+    for (let [key, value] of this) {
+      copy.set(key, value);
+    }
+    return copy;
+  }
+   
+  /**
+   * produces a valid row as csv string
+   * 
+   * @returns: row as csv string
+   */
+  toString(): string {
+    const values = this.headers.map((col) => this.get(col));
+    return JSON.stringify(Array.from(values).map((el) => !!el ? el: "")).slice(1, -1);
+  }
+};
+
+const PRODUCT_CSV_HEADERS = [
+  constants.ALL_HEADERS.productEPC,
+  constants.ALL_HEADERS.productName,
+  constants.ALL_HEADERS.productGTIN,
+]
+
+const TRANSACTION_CSV_HEADERS = [
+  constants.ALL_HEADERS.transactionID,
+  constants.ALL_HEADERS.transactionType,
+]
 
 // Helper method to take constraints and build parameters for the trace URL
 export function getTraceConstraintParameters(location_id: string,
@@ -188,24 +256,20 @@ export async function getTransactions(req, inputEpcs: string[]) {
   return transactionIds;
 }
 
-export function processResponse(responseList: any[], eventType: string) {
-  let ids: string[] = []; // Get a list of all EPCs listed as outputs on these tranformations or transactionIds
+export function processResponse(responseList: any[], eventType: string):any[] {
+  let ids: Object[] | string[] = []; // Get a list of all EPCs listed as outputs on these tranformations or transactionIds
   responseList.forEach((responseJSON: any) => {
     responseJSON.events.forEach((event) => {
       if (eventType === 'aggregation') {
-        // Loop through transactions on each event to get ids
-        event.transaction_ids.forEach((transaction) => {
-          ids = [...ids, transaction.id];
-        });
+        ids = [...ids, ...event.transaction_ids];
       } else if (eventType === 'transformation') {
         event.output_quantities.forEach((output) => {
           ids = [...ids, output.epc_id];
         });
       }
     });
-    // NOTE: Works but might be (ids && ids.length > 0) or even just (ids && ids.length).
-    // NOTE: Modified for more clarity
   });
+
   return (ids && ids.length > 0) ? _.uniq(ids) : [];
 
 }
@@ -575,4 +639,88 @@ function calcCheckDigit(s: string): number {
     result = result + parseInt(rs.charAt(counter), 10) * Math.pow(3, ((counter + 1) % 2));
   }
   return (10 - (result % 10)) % 10;
+}
+
+
+/**
+ * Returns product info (name, gtin) from epc
+ * 
+ * @param epc EPC string
+ */
+export function getProductFromEpc(epc: string) {
+  let product;
+  if (epc && ((epc.indexOf(constants.URN_GS1_SGTIN) >= 0) ||
+    (epc.indexOf(constants.URN_IFT_SGTIN) >= 0) ||
+    (epc.indexOf(constants.URN_PAT_SGTIN) >= 0))) {
+    product = getSGTIN(epc);
+  } else if (epc && ((epc.indexOf(constants.URN_GS1_LGTIN) >= 0) ||
+    (epc.indexOf(constants.URN_IFT_LGTIN) >= 0))) {
+    product = getLGTIN(epc);
+  }
+  return product;
+}
+
+/**
+ * Returns strings in CSV format
+ * 
+ * @param EPCs array of EPCs
+ */
+export async function formatEPCtoCSV(req, EPCs: string[]): Promise<[string[], CSVRow[]]> {
+  let rows: CSVRow[] = [];
+
+  let product_info = [];
+  if (!!EPCs) {
+    EPCs.forEach(epc => {
+      const product = getProductFromEpc(epc);
+      if (product) product_info.push({epc: epc, product: product});
+    })
+  }
+
+  const all_products = await getProductsData(req, _.uniq(product_info.map(p => p.product.gtin)));
+
+  product_info.forEach(({epc, product}) => {
+    const row = new CSVRow(PRODUCT_CSV_HEADERS);
+    row.set(constants.ALL_HEADERS.productEPC, epc);
+
+    const products = all_products.filter((p) => {
+      return p.id === product.gtin;
+    })
+    if (!!products) {
+      products.forEach(p => {
+        const pRow = row.copy();
+        pRow.set(constants.ALL_HEADERS.productName, (p && p.description) || "");
+        pRow.set(constants.ALL_HEADERS.productGTIN, (p && p.id) || "");
+
+        rows.push(pRow);
+      })
+    } else {
+      rows.push(row);
+    }
+  });
+
+  return [PRODUCT_CSV_HEADERS, rows];
+}
+
+export function formatTransactiontoCSV(transactions: {id:string, type:string}[]): [string[], CSVRow[]] {
+  let rows: CSVRow[] = [];
+
+  if (!!transactions) {
+    transactions.forEach(transaction => {
+      const row = new CSVRow(TRANSACTION_CSV_HEADERS);
+
+      row.set(constants.ALL_HEADERS.transactionID, transaction.id);
+      if (transaction.type.includes(':po') || transaction.type.includes(':prodorder')) {
+        row.set(constants.ALL_HEADERS.transactionType, "PO");
+      } else if (transaction.type.includes(':desadv')) {
+        row.set(constants.ALL_HEADERS.transactionType, "DA");
+      } else if (transaction.type.includes(':recadv')) {
+        row.set(constants.ALL_HEADERS.transactionType, "RA");
+      } else {
+        console.log(transaction.type);
+      }
+      rows.push(row);
+    })
+  }
+
+  return [TRANSACTION_CSV_HEADERS, rows];
 }

@@ -133,7 +133,7 @@ export function formatOutput(epcTraceMap) {
     prodInfo.epcId = tracedData.outputs.epc_id;
     const [eventArr, orgId] = getFormattedEventsArray(tracedData.outputs.events);
     // get product Gtin from epc
-    const productGtinInfo = getProductFromEpc(tracedData.outputs.epc_id);
+    const productGtinInfo = ift_service.getProductFromEpc(tracedData.outputs.epc_id);
     const products = productMasterData.filter((product) => {
       return (product.id === productGtinInfo.gtin);
     });
@@ -160,7 +160,7 @@ export function formatOutput(epcTraceMap) {
       inputProdInfo.epcId = input.epc_id;
       const [inputEventArr, inputEventOrgId] = getFormattedEventsArray(input.events);
       // get product Gtin from epc
-      const inputProductGtinInfo = getProductFromEpc(input.epc_id);
+      const inputProductGtinInfo = ift_service.getProductFromEpc(input.epc_id);
 
       const inputProducts = productMasterData.filter((product) => {
         return (product.id === inputProductGtinInfo.gtin);
@@ -216,7 +216,7 @@ function processEventData(eventData) {
     // });
 
     event.epcs_ids.forEach((epc) => {
-      const product = getProductFromEpc(epc);
+      const product = ift_service.getProductFromEpc(epc);
       if (product) {
         productArray.push(product.gtin);
       }
@@ -290,18 +290,6 @@ function getTransactionInfo(transactions) {
   return transArray;
 }
 
-export function getProductFromEpc(epc: string) {
-  let product;
-  if (epc && ((epc.indexOf(ift_service.constants.URN_GS1_SGTIN) >= 0) ||
-    (epc.indexOf(ift_service.constants.URN_IFT_SGTIN) >= 0) ||
-    (epc.indexOf(ift_service.constants.URN_PAT_SGTIN) >= 0))) {
-    product = ift_service.getSGTIN(epc);
-  } else if (epc && ((epc.indexOf(ift_service.constants.URN_GS1_LGTIN) >= 0) ||
-    (epc.indexOf(ift_service.constants.URN_IFT_LGTIN) >= 0))) {
-    product = ift_service.getLGTIN(epc);
-  }
-  return product;
-}
 
 /**
  * Return a formatted events array
